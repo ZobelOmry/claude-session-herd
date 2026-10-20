@@ -1,0 +1,255 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>herd stage</title>
+<style>
+  /* Renders the herd pane the way Claude Code draws it in a dark iTerm, from the mod's own layout rules. */
+  :root {
+    --bg: #15171c; --chrome: #23262d; --fg: #e6e6e6; --subtle: #8b8f98; --permission: #b1b9f9; --suggestion: #b1b9f9;
+    --warning: #ffc107; --success: #4eba65; --error: #ff6b80; --inverse: #15171c; --rule: #3a3e47; --accent: #d77757;
+    --cw: 8.43px; --lh: 17px;
+  }
+  html, body { margin: 0; background: transparent }
+  body { font: 14px/17px Menlo, 'SF Mono', monospace; color: var(--fg); -webkit-font-smoothing: antialiased }
+  .window { background: var(--bg); border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.45), 0 0 0 1px #2c3038; display: inline-block }
+  .titlebar { height: 30px; background: var(--chrome); display: flex; align-items: center; gap: 8px; padding: 0 14px; color: #9aa0aa; font: 12px -apple-system, system-ui, sans-serif }
+  .dot { width: 12px; height: 12px; border-radius: 50% } .r { background: #ff5f57 } .y { background: #febc2e } .g { background: #28c840 }
+  .titlebar .t { flex: 1; text-align: center; margin-right: 52px }
+  .body { display: flex; padding: 10px 6px 12px 12px }
+  .chat { width: calc(var(--cw) * 58); padding-right: calc(var(--cw) * 2); color: var(--fg) }
+  .pane { position: relative; border-left: 1px solid var(--rule); white-space: pre }
+  .line { height: var(--lh); white-space: pre; overflow: hidden }
+  .pet { position: absolute; image-rendering: pixelated }
+  .s { color: var(--subtle) } .p { color: var(--permission) } .w { color: var(--warning) } .ok { color: var(--success) } .e { color: var(--error) } .acc { color: var(--suggestion) }
+  .b { font-weight: 700 }
+  .badge-p { background: var(--permission); color: var(--inverse); font-weight: 700 }
+  .badge-w { background: var(--warning); color: var(--inverse); font-weight: 700 }
+  .hover { background: #2a2e37 }
+  .toastline { margin-top: 10px; padding: 6px 10px; border-top: 1px solid var(--rule); min-height: var(--lh) }
+  .prompt { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin-top: 8px; padding: 2px 0 }
+  .cursor { display: inline-block; width: var(--cw); background: var(--fg) }
+  .pointer { position: absolute; width: 14px; height: 20px }
+  /* the moods sheet */
+  .sheet { display: flex; gap: 22px; padding: 22px 26px; background: var(--bg); border-radius: 14px }
+  .mood { display: grid; justify-items: center; gap: 10px; font: 13px -apple-system, system-ui, sans-serif; color: var(--subtle) }
+  .mood b { color: var(--fg); font-weight: 600 }
+  .widths { display: flex; gap: 24px; align-items: flex-start }
+  .cap { font: 12px -apple-system, system-ui, sans-serif; color: #9aa0aa; margin: 8px 0 0 4px }
+</style>
+<div id="root"></div>
+<script src="sprites.js"></script>
+<script>
+const Q = new URLSearchParams(location.search)
+const SCENE = Q.get('scene') || 'hero'
+const FRAME = +(Q.get('frame') || 0)
+const SIT_V = VARIANTS.find(v => v.id === 'sit-tri'), HEAD_V = VARIANTS.find(v => v.id === 'head-tri')
+const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+const span = (cls, t) => `<span class="${cls}">${esc(t)}</span>`
+const fit = (t, n) => (t.length <= n ? t : t.slice(0, Math.max(0, n - 1)) + '…')
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n))
+const firstSentence = t => t.split(/(?<=[.!?])\s+/)[0]
+
+function petCanvas(sprite, mood, tick, x, y) {
+  const frames = sprite.moods[mood], f = frames[tick % frames.length]
+  const cw = 8.43, ph = 8.5
+  const c = document.createElement('canvas')
+  const S = 4 // supersample so the PNG stays crisp
+  c.width = Math.round(sprite.size[0] * cw * S); c.height = Math.round(sprite.size[1] * ph * S)
+  c.style.width = `${sprite.size[0] * cw}px`; c.style.height = `${sprite.size[1] * ph}px`
+  const g = c.getContext('2d')
+  f.forEach((row, py) => [...row].forEach((ch, px) => {
+    if (ch === '.') return
+    g.fillStyle = PALETTE[ch]
+    g.fillRect(Math.floor(px * cw * S), Math.floor(py * ph * S), Math.ceil(cw * S) + 1, Math.ceil(ph * S) + 1)
+  }))
+  c.className = 'pet'; c.style.left = `calc(${x} * var(--cw))`; c.style.top = `calc(${y} * var(--lh))`
+  return c
+}
+
+// The pane, laid out by the same rules as hooks/register.tsx (paneLayout, the row lines, fit).
+function pane(state, cols, tick, opts = {}) {
+  const inner = cols - 2
+  const isStacked = inner < 40
+  const side = isStacked ? inner : inner - 15
+  const isShort = side < 30, labelW = isShort ? 3 : 8
+  const meterCells = clamp(side - labelW - 6, 4, 16)
+  const compactInline = side - (labelW + 1 + meterCells + 5) >= 9
+  const planCells = clamp(side - 10, 6, 24)
+  const sprite = inner >= 40 ? SIT_V : HEAD_V
+  const petRows = sprite.size[1] / 2
+  const lines = []
+  const pad = ' '
+  const meter = (label, pct) => {
+    const on = Math.min(meterCells, Math.round((pct / 100) * meterCells))
+    const tone = pct >= 85 ? 'e' : pct >= 60 ? 'w' : 'ok'
+    return span('s', (isShort ? label[1] : label[0]).padEnd(labelW) + ' ') + span(tone, '━'.repeat(on)) + span('s', '─'.repeat(meterCells - on)) + span(tone === 'ok' ? 's' : tone, ` ${pct}%`)
+  }
+  const head = state.self.headline
+  const status = [
+    span(head.cls, fit(head.text, side)),
+    state.self.plan ? span('ok', '━'.repeat(Math.round(state.self.plan[0] / state.self.plan[1] * planCells))) + span('s', '─'.repeat(planCells - Math.round(state.self.plan[0] / state.self.plan[1] * planCells))) + span('s', `  ${state.self.plan[0]} of ${state.self.plan[1]}`) : null,
+    meter(['context', 'ctx'], state.self.ctx) + (compactInline ? '  ' + span('s', 'Compact') : ''),
+    meter(['5h limit', '5h'], state.self.fiveH),
+    compactInline ? null : span('s', 'Compact'),
+  ].filter(Boolean)
+  lines.push('')
+  const offset = isStacked ? 12 + 3 : 15
+  const besideRows = isStacked ? 2 : status.length
+  const blockRows = isStacked ? petRows + 1 + (status.length - 2) : Math.max(petRows, besideRows)
+  for (let r = 0; r < blockRows; r++) {
+    let l = pad
+    if (isStacked && r > petRows) l += status[2 + (r - petRows - 1)] ?? ''
+    else if (r < petRows || !isStacked) {
+      l += ' '.repeat(offset)
+      const s = isStacked ? status[r] : status[r]
+      if (r < besideRows && s) l += s
+    }
+    lines.push(l)
+  }
+  lines.push('')
+  lines.push(pad + span('s', '─'.repeat(inner)))
+  lines.push('')
+  const need = state.rows.filter(r => r.state === 'waiting' || r.state === 'unseen').length
+  const headTxt = need ? `${need} need${need === 1 ? 's' : ''} you` : 'Nothing needs you'
+  lines.push(pad + span(need ? 'p b' : 'ok b', headTxt) + ' '.repeat(Math.max(2, inner - headTxt.length - 11)) + span('acc', 'm') + span('s', ': Minimize'))
+  const order = { waiting: 0, unseen: 1, working: 2, ready: 3 }
+  const rows = [...state.rows].sort((a, b) => order[a.state] - order[b.state] || a.since - b.since)
+  const rowTop = {}
+  for (const r of rows) {
+    lines.push('')
+    rowTop[r.id] = lines.length
+    const glyph = { waiting: ['p', '●'], unseen: ['w', '●'], working: ['acc', '◐'], ready: ['s', '○'] }[r.state]
+    const model = r.model && inner >= 34 ? `  ${r.model}` : ''
+    const self = r.self ? '  this session' : ''
+    const needs = r.state === 'waiting' || r.state === 'unseen'
+    const label = needs
+      ? span(r.state === 'waiting' ? 'badge-p' : 'badge-w', ` ${fit(r.label, inner - 4 - model.length - self.length)} `)
+      : span(r.self ? 'b' : '', fit(r.label, inner - 2 - model.length - self.length))
+    lines.push(pad + span(glyph[0], glyph[1] + ' ') + label + span('s', model + self))
+    const detail = r.state === 'waiting' ? `Needs your answer for ${r.tool}` : r.state === 'unseen' ? `Done: ${firstSentence(r.recap)}` : r.state === 'working' ? (r.task || firstSentence(r.recap)) : firstSentence(r.recap)
+    const hasMore = !!r.recap && (r.state === 'waiting' || firstSentence(r.recap) !== r.recap || fit(detail, inner - 4 - r.age.length) !== detail)
+    const d = fit(detail, inner - 4 - r.age.length - (hasMore ? 6 : 0))
+    const cls = r.state === 'waiting' ? 'p' : r.state === 'unseen' ? 'w' : 's'
+    const left = '  ' + d + '  ' + r.age
+    lines.push(pad + span(cls, '  ' + d) + span('s', '  ' + r.age) + (hasMore ? ' '.repeat(Math.max(1, inner - left.length - 4)) + span('s', opts.expanded === r.id ? 'less' : 'more') : ''))
+    if (opts.expanded === r.id) {
+      const tag = `\u0000recap ${r.recapAge}`
+      const words = [...r.recap.split(' '), tag], wrap = []
+      let cur = ''
+      for (const w of words) { if ((cur + ' ' + w).trim().length > inner - 2) { wrap.push(cur.trim()); cur = w } else cur += ' ' + w }
+      wrap.push(cur.trim())
+      wrap.forEach(w => { const [txt, age] = w.split('\u0000'); lines.push(pad + '  ' + esc(txt.trim()) + (age !== undefined ? span('s', (txt.trim() ? '  ' : '') + age) : '')) })
+    }
+  }
+  const el = document.createElement('div')
+  el.className = 'pane'
+  el.style.width = `calc(${cols} * var(--cw))`
+  el.innerHTML = lines.map(l => `<div class="line">${l || ' '}</div>`).join('')
+  el.appendChild(petCanvas(sprite, state.self.mood, tick, 1, 1))
+  if (opts.hover) {
+    const i = rowTop[opts.hover]
+    const ls = el.querySelectorAll('.line')
+    ls[i - 1].classList.add('hover'); ls[i].classList.add('hover')
+  }
+  if ('toast' in opts) {
+    const wrap = document.createElement('div')
+    wrap.appendChild(el)
+    const t = document.createElement('div'); t.className = 'toastline'; t.innerHTML = opts.toast ? '✻ ' + opts.toast : '&nbsp;'
+    wrap.appendChild(t)
+    return wrap
+  }
+  return el
+}
+
+// ---------------- the demo flock ----------------
+const BASE = () => ({
+  self: { headline: { cls: 'b', text: 'Redesigning the pricing page' }, plan: [3, 7], ctx: 41, fiveH: 18, mood: 'working' },
+  rows: [
+    { id: 'self', self: true, label: 'Pricing page redesign', model: 'Opus 5.5', state: 'working', since: 5, age: '6m', task: 'Redesigning the pricing page', recap: 'Rebuilding the pricing table as one component. Next, the annual toggle.', recapAge: '2m ago' },
+    { id: 'api', label: 'api-server', model: 'Sonnet 5.5', state: 'working', since: 3, age: '12m', task: 'Adding rate limits to /search', recap: 'Adding a token bucket to /search. Next, the 429 response.', recapAge: '4m ago' },
+    { id: 'flaky', label: 'Fix flaky checkout test', model: 'Opus 5.5', state: 'working', since: 2, age: '9m', task: 'Hunting the cart fixture race', recap: 'Fixed the race in the cart fixture; all 214 tests pass. Waiting for your review.', recapAge: 'just now' },
+    { id: 'pg', label: 'Migrate to Postgres 16', model: 'Opus 5.5', state: 'working', since: 1, age: '31m', task: 'Rewriting the migration runner', recap: 'Rewriting the migration runner for Postgres 16. Next, a dry run on staging.', recapAge: '7m ago' },
+    { id: 'docs', label: 'docs-site', model: 'Haiku 4.5', state: 'ready', since: 0, age: '1h 4m', recap: 'Drafted the quickstart page and fixed three broken links. Next, screenshots for the install section.', recapAge: '18m ago' },
+  ],
+})
+const row = (s, id) => s.rows.find(r => r.id === id)
+
+// The GIF's story, one entry per 500 ms tick.
+function story(f) {
+  const s = BASE(), o = {}
+  if (f >= 6) { Object.assign(row(s, 'api'), { state: 'waiting', tool: 'Bash', age: 'just now', since: 9 }) }
+  if (f >= 6 && f < 10) o.toast = span('p', 'api-server needs your answer')
+  if (f >= 12) { Object.assign(row(s, 'flaky'), { state: 'unseen', age: 'just now', since: 12 }) }
+  if (f >= 12 && f < 16) o.toast = span('w', 'Fix flaky checkout test is done and waits for you')
+  if (f >= 18 && f < 21) o.hover = 'api'
+  if (f >= 21) { Object.assign(row(s, 'api'), { state: 'working', age: 'just now', task: 'Running the rate-limit tests' }) }
+  if (f >= 27) o.expanded = 'docs'
+  if (f >= 27 && f < 29) o.hover = 'docs'
+  if (f >= 33) { s.self.mood = 'happy'; s.self.headline = { cls: 'ok b', text: 'Done in 6m 12s' }; s.self.plan = [7, 7]; Object.assign(row(s, 'self'), { state: 'ready', task: null, age: 'just now' }) }
+  return [s, o]
+}
+
+const root = document.getElementById('root')
+function windowFrame(inner, title, chatCols) {
+  const w = document.createElement('div'); w.className = 'window'
+  w.innerHTML = `<div class="titlebar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="t">${title}</span></div>`
+  const body = document.createElement('div'); body.className = 'body'
+  if (chatCols) {
+    const chat = document.createElement('div'); chat.className = 'chat'
+    chat.innerHTML = [
+      span('s', '> ') + 'make the pricing table one component',
+      '',
+      span('acc', '⏺ ') + 'I will split the work into steps.',
+      '',
+      span('ok', '⏺ ') + span('b', 'Update') + span('s', '(src/pricing/Table.tsx)'),
+      span('s', '  ⎿  Updated with 48 additions and 61 removals'),
+      '',
+      span('ok', '⏺ ') + span('b', 'Bash') + span('s', '(npm test -- pricing)'),
+      span('s', '  ⎿  ✓ 38 passed'),
+      '',
+      span('acc', '⏺ ') + 'The table is now one component. Next, the annual toggle.',
+      ...Array(13).fill(''),
+    ].map(l => `<div class="line">${l || ' '}</div>`).join('') + `<div class="prompt"><div class="line">${span('s', '> ')}<span class="cursor"> </span></div></div>`
+    body.appendChild(chat)
+  }
+  body.appendChild(inner)
+  w.appendChild(body)
+  return w
+}
+
+if (SCENE === 'hero') {
+  const [s] = story(14)
+  root.appendChild(windowFrame(pane(s, 52, 1, { expanded: null }), 'claude — pricing-page', true))
+} else if (SCENE === 'gif') {
+  const [s, o] = story(FRAME)
+  root.appendChild(windowFrame(pane(s, 52, FRAME, { toast: undefined, ...o }), 'herd — Sessions', false))
+} else if (SCENE === 'moods') {
+  const sheet = document.createElement('div'); sheet.className = 'sheet'
+  for (const [m, label, what] of [['idle', 'Idle', 'sits, blinks, pants'], ['working', 'Working', 'wags its tail'], ['waiting', 'Needs you', 'ears up, barks'], ['happy', 'Done', 'jumps'], ['sad', 'Tool failed', 'ears down']]) {
+    const box = document.createElement('div'); box.className = 'mood'
+    const holder = document.createElement('div'); holder.style.position = 'relative'; holder.style.width = `${12 * 8.43 * 1.6}px`; holder.style.height = `${16 * 8.5 * 1.6}px`
+    const c = petCanvas(SIT_V, m, FRAME, 0, 0); c.style.transform = 'scale(1.6)'; c.style.transformOrigin = '0 0'
+    holder.appendChild(c); box.appendChild(holder)
+    box.insertAdjacentHTML('beforeend', `<div><b>${label}</b></div><div>${what}</div>`)
+    sheet.appendChild(box)
+  }
+  root.appendChild(sheet)
+} else if (SCENE === 'widths') {
+  const [s] = story(14)
+  const wrap = document.createElement('div'); wrap.className = 'widths'
+  for (const cols of [62, 44, 34]) {
+    const col = document.createElement('div')
+    col.appendChild(windowFrame(pane(s, cols, 1), `${cols} columns`, false))
+    wrap.appendChild(col)
+  }
+  root.appendChild(wrap)
+} else if (SCENE === 'recap') {
+  const [s] = story(14)
+  root.appendChild(windowFrame(pane(s, 52, 1, { expanded: 'flaky' }), 'Sessions — recap expanded', false))
+}
+if (SCENE === 'logo') {
+  const holder = document.createElement('div'); holder.style.cssText = 'position:relative;width:303px;height:408px;margin:6px'
+  const c = petCanvas(SIT_V, 'waiting', 0, 0, 0); c.style.transform = 'scale(3)'; c.style.transformOrigin = '0 0'
+  holder.appendChild(c); root.appendChild(holder)
+}
+document.body.dataset.ready = '1'
+</script>

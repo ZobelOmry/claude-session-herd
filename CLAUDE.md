@@ -12,7 +12,8 @@ herd is a Claude Code plugin ("mod"): a side pane that lists every running Claud
 - `hooks/collie.ts` — the dog's frames: one letter per pixel, two pixel rows per terminal row, one frame per 500 ms.
 - `types/index.d.ts` — the `$.state` contract; every new atom is declared here.
 - `.claude-plugin/plugin.json` — name `herd`, `userConfig` options (`recaps`, `renames`); `marketplace.json` makes `/plugin install herd --marketplace ZobelOmry/claude-session-herd` work.
-- `assets/` — README images, rendered from the real frames with made-up demo sessions (never a capture of real session titles).
+- `assets/` — README images, rendered with made-up demo sessions (never a capture of real session titles).
+- `assets/stage/stage.html?scene=hero|gif|moods|widths|recap|logo` — the page the images are rendered from (headless Chrome `--screenshot --force-device-scale-factor=2`; the GIF is `&frame=N` frames joined with ffmpeg). Its `sprites.js` is a hand copy of the dog: when `hooks/collie.ts` changes, update it too.
 
 ## Invariants
 
@@ -36,8 +37,8 @@ Do all four steps, in order, without being asked. A fix in any step restarts the
    ```
    Then a real run: `claude -p "…" --debug-file debug.log` from a scratch folder, and read the `herd` lines and the session's snapshot. Exercise the error paths too (no iTerm2, `recaps: false`, a refused `/rename`).
 3. **Test the UI in Chrome.** Use Claude in Chrome (the `claude-in-chrome` tools) on every UI surface the change touches. Take screenshots and read the console:
-   - The README as GitHub renders it (the pushed branch, or `stage.html` before the push): images, GIF, links, layout at phone and desktop widths.
-   - The `assets/` renders at full size, and the `readme/stage.html` frames at each pane width.
+   - The README as GitHub renders it (the pushed branch; before the push, `assets/stage/stage.html?scene=hero`): images, GIF, links, layout at phone and desktop widths.
+   - The `assets/` renders at full size, and `assets/stage/stage.html?scene=widths`.
 
    Chrome cannot show a terminal. So also see every pane, band or toast change in a live iTerm2 session at a wide (≥ 62), a medium (~44) and a narrow (≤ 34) pane width.
 4. **Check the ask.** Re-read the owner's request, item by item, and mark each one done (with the evidence) or not done (with the reason). An item the diff does not cover is not done.
