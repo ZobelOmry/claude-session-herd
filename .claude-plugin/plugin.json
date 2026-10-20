@@ -1,0 +1,14 @@
+{
+  "name": "herd",
+  "version": "0.1.0",
+  "description": "A pixel border collie that watches all your sessions",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "recaps": {
+      "type": "boolean",
+      "title": "Fresh recaps",
+      "description": "After a turn ends, ask Haiku for a one-line recap of the session (at most one every 5 minutes). Off: no model calls; the panel shows only Claude Code's own recaps.",
+      "default": true
+    }
+  }
+}
