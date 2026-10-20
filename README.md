@@ -59,6 +59,16 @@ The recap is the newest of two sources:
 - Claude Code's own recap, the one it writes when you come back to a session after a while.
 - A fresh one herd asks **Haiku** for after a turn ends, at most once every 5 minutes per session. ([You can turn this off.](#settings))
 
+### Suggests a better name
+
+Sessions get named after their first prompt, and then the work moves on. Now and then, when a session is idle and its work no longer matches its name, herd asks right above the prompt:
+
+```
+Rename this session to "Postgres 16 migration"?   [ Rename ]   Keep
+```
+
+**Rename** runs `/rename` for you. **Keep** leaves it alone for 3 hours, unless the work moves to a new topic. It asks at most once an hour, and less often over a name you picked yourself. The name comes from the same Haiku call as the recap, so it costs nothing extra.
+
 ### Takes you there
 
 Click any row and its iTerm2 tab jumps to the front, window and all.
@@ -95,8 +105,9 @@ Wide: the whole dog sits beside the meters. Narrower: labels shorten to `ctx` / 
 | Option | Default | What it does |
 |---|---|---|
 | **Fresh recaps** | on | After a turn ends, ask Haiku for a one-line recap (at most one per session every 5 minutes). Off: herd makes no model calls at all, and rows show only Claude Code's own recaps. |
+| **Rename suggestions** | on | Offer a better session name now and then, from the same Haiku call. Needs Fresh recaps. |
 
-Change it in `/config`, where it shows as a row of its own.
+Change them in `/config`, where each shows as a row of its own.
 
 ## How it works
 
@@ -110,7 +121,7 @@ Change it in `/config`, where it shows as a row of its own.
 ```
 
 - **No server, no daemon.** Each session writes one JSON file every 3 seconds and reads the others'. A session that stops writing for 15 seconds drops off the list.
-- **Titles and Claude Code's recaps** come from the session's own transcript.
+- **Titles and Claude Code's recaps** come from the session's own transcript. A name you set with `/rename` wins over the one Claude Code picked.
 - **"Have you seen it?"** is one `osascript` call that asks iTerm2 whether that tab is in front. It only runs while a reply is waiting. If macOS denies the permission, herd assumes you've seen it rather than nagging you about every turn.
 - **The jump** is another `osascript` call that selects the tab by its iTerm2 session id. Only a validated id goes into it.
 - **Nothing leaves your machine** except the optional Haiku recap, which goes through Claude Code's own API client like any other request.
@@ -118,7 +129,7 @@ Change it in `/config`, where it shows as a row of its own.
 ## FAQ
 
 **Does it cost tokens?**
-Only the fresh recaps: one small Haiku call per session, at most every 5 minutes, on the last prompt and reply (a few thousand tokens). Turn **Fresh recaps** off and herd costs nothing.
+Only the fresh recaps: one small Haiku call per session, at most every 5 minutes, on the last prompt and reply (a few thousand tokens). Rename suggestions ride on the same call. Turn **Fresh recaps** off and herd costs nothing.
 
 **I use Terminal.app / Ghostty / tmux / VS Code.**
 The panel, the recaps, the meters and the dog all work. Clicking a row shows a toast instead of jumping, and a finished turn never counts as unseen. Pull requests for other terminals are very welcome.

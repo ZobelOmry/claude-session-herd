@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { ElementConstructor, EngineInterface, Register, RenderNode, ResolveInput, TextProps } from 'claude-code'
 
-import type { Flash, Recap, SessionSnap, Task, Usage } from '../types'
+import type { Flash, Recap, RenameAsk, SessionSnap, Task, Usage } from '../types'
 
 // ---- art: the border collie, generated into ./collie (one letter per pixel; '.' is transparent) ----
 
@@ -39,6 +39,9 @@ const lastPromptAtom = atom({ plugin: 'herd', key: 'lastPrompt' } as const, null
 const ownRecapAtom = atom({ plugin: 'herd', key: 'ownRecap' } as const, null as Recap | null)
 const awayRecapAtom = atom({ plugin: 'herd', key: 'awayRecap' } as const, null as Recap | null)
 const expandedAtom = atom({ plugin: 'herd', key: 'expanded' } as const, {} as Record<string, boolean>)
+const isCustomTitleAtom = atom({ plugin: 'herd', key: 'isCustomTitle' } as const, false)
+const renameOfferAtom = atom({ plugin: 'herd', key: 'renameOffer' } as const, null as string | null)
+const renameAskAtom = atom({ plugin: 'herd', key: 'renameAsk' } as const, null as RenameAsk | null)
 const demoAtom = atom({ plugin: 'herd', key: 'demo' } as const, null as { mood: Mood; label: string } | null)
 
 const DEMO: { mood: Mood; label: string }[] = [
@@ -228,14 +231,63 @@ export function shortModel(id: string | null | undefined): string | null {
   return m[2] ? `${name} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : name
 }
 
+// Haiku answers {"recap","name"}; anything else is taken as a recap with no name.
+export function parseRecapReply(text: string): { recap: string | null; name: string | null } {
+  const trimmed = text.trim()
+  const looksJson = /^(```|\{)/.test(trimmed)
+  const json = /\{[\s\S]*\}/.exec(trimmed)?.[0]
+  try {
+    const row = JSON.parse(json ?? '') as { recap?: unknown; name?: unknown }
+    const recap = typeof row.recap === 'string' && row.recap.trim() ? row.recap.replace(/\s+/g, ' ').trim() : null
+    return { recap, name: typeof row.name === 'string' ? cleanName(row.name) : null }
+  } catch {
+    // cut off at the token cap, or prose around the JSON: keep a readable recap, never raw JSON
+    const field = /"recap"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(trimmed)?.[1]
+    if (field) return { recap: field.replace(/\\(.)/g, '$1').replace(/\s+/g, ' ').trim() || null, name: null }
+    return { recap: looksJson ? null : trimmed.replace(/\s+/g, ' ') || null, name: null }
+  }
+}
+
+// A name goes into /rename as its argument: one line, no control characters, quotes, slashes or a leading dash.
+export function cleanName(raw: string): string | null {
+  const name = raw
+    .replace(/[\u0000-\u001f\u007f"'“”‘’`\\/]/g, ' ')
+    .replace(/^[\s-]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const words = name.split(' ').filter(Boolean)
+  return words.length >= 1 && words.length <= 6 && name.length <= 48 ? name : null
+}
+
+const HOUR = 60 * 60_000
+const nameWords = (n: string) => new Set(n.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2))
+
+// Two names say the same thing when most of their words are shared.
+export function isDifferentName(a: string, b: string | null): boolean {
+  if (!b) return true
+  const x = nameWords(a), y = nameWords(b)
+  if (!x.size || !y.size) return a.trim().toLowerCase() !== b.trim().toLowerCase()
+  const shared = [...x].filter(w => y.has(w)).length
+  return shared / new Set([...x, ...y]).size < 0.5
+}
+
+// At most once an hour (3 hours over a name you chose); after Keep, 3 hours unless the work moved to a new topic.
+export function shouldAskRename(o: { name: string | null; current: string | null; isCustom: boolean; ask: RenameAsk | null; now: number }): boolean {
+  if (!o.name || !isDifferentName(o.name, o.current)) return false
+  if (o.now - (o.ask?.lastAskAt ?? -Infinity) < (o.isCustom ? 3 * HOUR : HOUR)) return false
+  if (o.ask?.keptName && o.now - o.ask.keptAt < 3 * HOUR && !isDifferentName(o.name, o.ask.keptName)) return false
+  return true
+}
+
 export const firstSentence = (text: string) => text.split(/(?<=[.!?])\s+/)[0] ?? text
 
 // What Haiku is asked after a turn: the last prompt and the reply, both cut to their ends.
 export function recapPrompt(title: string | null, prompt: string | null, answer: string): string {
   const tail = (t: string, n: number) => (t.length > n ? `…${t.slice(-n)}` : t)
   return [
-    'Below is the latest exchange in a Claude Code session. In one or two short sentences (at most 35 words),',
-    'say what the session is working on and what happens next. Plain text, no preamble, no quotes.',
+    'Below is the latest exchange in a Claude Code session. Answer with JSON only: {"recap": "...", "name": "..."}.',
+    'recap: one or two short sentences (at most 35 words) on what the session is working on and what happens next.',
+    'name: a 2 to 5 word name for the session, naming the work itself (like "Checkout test race fix"), no quotes or punctuation.',
     title ? `Session title: ${title}` : '',
     prompt ? `<prompt>\n${tail(prompt, 1500)}\n</prompt>` : '',
     `<reply>\n${tail(answer, 3000)}\n</reply>`,
@@ -338,19 +390,41 @@ async function markUnseenIfAway($: $) {
   await writeSnap($).catch(() => {})
 }
 
+// Rename runs Claude Code's own /rename; where a plugin may not run it, a toast says what to type.
+async function renameTo($: $, name: string) {
+  await update($, renameOfferAtom, () => null)
+  try {
+    // a refusal can come back as a { deny } answer rather than a rejection: both fall back to the prompt
+    const ran = (await $.command.run({ command: 'rename', args: name })) as { deny?: unknown }
+    if (ran && ran.deny) throw new Error(String(ran.deny))
+    await update($, titleAtom, () => name)
+    await update($, isCustomTitleAtom, () => true)
+    await writeSnap($).catch(() => {})
+  } catch {
+    // no prompt.fill: it would replace whatever you were typing
+    $.ui.toast(`Type /rename ${name} to rename the session.`)
+  }
+}
+
+async function keepName($: $, name: string) {
+  const now = await $.clock.now()
+  await update($, renameOfferAtom, () => null)
+  await update($, renameAskAtom, a => ({ lastAskAt: a?.lastAskAt ?? now, keptName: name, keptAt: now }))
+}
+
 // ---- cross-session snapshots: one JSON file per session in a shared folder ----
 
 async function snapDir($: $): Promise<string> {
   return `${(await $.env.get('HOME')) ?? '/tmp'}/.claude/herd/sessions`
 }
 
-// The tab title Claude Code gives the session lives in its transcript as `"aiTitle"` rows, the newest last.
-// grep, not $.fs.read: a long transcript is past fs.read's 4 MiB.
-export function lastTitle(grepOutput: string): string | null {
+// The tab title lives in the transcript as `"aiTitle"` rows (Claude Code's) and `"customTitle"` rows (yours, from
+// /rename), the newest last. grep, not $.fs.read: a long transcript is past fs.read's 4 MiB.
+export function lastTitle(grepOutput: string, field: 'aiTitle' | 'customTitle' = 'aiTitle'): string | null {
   const line = grepOutput.trim().split('\n').pop()
   if (!line) return null
   try {
-    return (JSON.parse(`{${line}}`) as { aiTitle?: string }).aiTitle?.trim() || null
+    return ((JSON.parse(`{${line}}`) as Record<string, string | undefined>)[field] ?? '').trim() || null
   } catch {
     return null
   }
@@ -359,28 +433,47 @@ export function lastTitle(grepOutput: string): string | null {
 async function refreshTranscript($: $) {
   const [home, cwd, id] = await Promise.all([$.env.get('HOME'), $.session.cwd(), $.session.id()])
   const transcript = `${home}/.claude/projects/${cwd.replace(/[^a-zA-Z0-9]/g, '-')}/${id}.jsonl`
-  const [titles, aways] = await Promise.all([
-    $.process.run(['grep', '-o', '"aiTitle":"[^"]*"', transcript], { timeoutMs: 5000 }),
+  const [titles, customs, aways] = await Promise.all([
+    $.process.run(['grep', '-oE', '"aiTitle":"([^"\\\\]|\\\\.)*"', transcript], { timeoutMs: 5000 }),
+    $.process.run(['grep', '-oE', '"customTitle":"([^"\\\\]|\\\\.)*"', transcript], { timeoutMs: 5000 }),
     $.process.run(['grep', '-F', '"subtype":"away_summary"', transcript], { timeoutMs: 5000 }),
   ])
-  const title = lastTitle(titles.stdout)
-  if (title && title !== (await read($, titleAtom))) await update($, titleAtom, () => title)
+  const custom = lastTitle(customs.stdout, 'customTitle')
+  const title = custom ?? lastTitle(titles.stdout)
+  if (title && title !== (await read($, titleAtom))) {
+    await update($, titleAtom, () => title)
+    if (custom) await update($, renameOfferAtom, () => null) // you renamed it yourself: the offer is moot
+  }
+  if ((await read($, isCustomTitleAtom)) !== !!custom) await update($, isCustomTitleAtom, () => !!custom)
   const away = lastAwaySummary(aways.stdout)
   if (away && !same(away, await read($, awayRecapAtom))) await update($, awayRecapAtom, () => away)
 }
 
 let isRecapInFlight = false // module var on purpose: two quick turns must not both ask Haiku before the first answer lands
 
-async function makeRecap($: $, answer: string) {
+async function makeRecap($: $, answer: string, isRenameOn: boolean) {
   if (isRecapInFlight) return
   isRecapInFlight = true
   try {
-    const [title, prompt] = await Promise.all([read($, titleAtom), read($, lastPromptAtom)])
-    const reply = await $.model.complete({ model: 'haiku', prompt: recapPrompt(title, prompt, answer), maxTokens: 160, timeoutMs: 30_000 })
+    const [titleThen, prompt] = await Promise.all([read($, titleAtom), read($, lastPromptAtom)])
+    const reply = await $.model.complete({ model: 'haiku', prompt: recapPrompt(titleThen, prompt, answer), maxTokens: 200, timeoutMs: 30_000 })
     if (!reply.isAnswered || !reply.text.trim()) return
+    const { recap, name } = parseRecapReply(reply.text)
     const at = await $.clock.now()
-    await update($, ownRecapAtom, () => ({ text: reply.text.trim(), at }))
-    await writeSnap($).catch(() => {})
+    if (recap) {
+      await update($, ownRecapAtom, () => ({ text: recap, at }))
+      await writeSnap($).catch(() => {})
+    }
+    if (!isRenameOn) return
+    // read after the call: you may have renamed the session while Haiku was answering
+    const [title, isCustom, ask, offer] = await Promise.all([read($, titleAtom), read($, isCustomTitleAtom), read($, renameAskAtom), read($, renameOfferAtom)])
+    if (!shouldAskRename({ name, current: title, isCustom, ask, now: at })) {
+      // an offer still up must still be news and still match the work, or it goes
+      if (offer && (!isDifferentName(offer, title) || (name !== null && isDifferentName(offer, name)))) await update($, renameOfferAtom, () => null)
+      return
+    }
+    await update($, renameOfferAtom, () => name)
+    await update($, renameAskAtom, a => ({ lastAskAt: at, keptName: a?.keptName ?? null, keptAt: a?.keptAt ?? 0 }))
   } finally {
     isRecapInFlight = false
   }
@@ -534,6 +627,7 @@ async function drawPet($: $, e: ResolveInput, mood: Mood, sprite: Sprite = HEAD)
 
 export const register: Register = (on, options) => {
   const isRecapOn = options.recaps !== false
+  const isRenameOn = options.renames !== false
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -608,7 +702,7 @@ export const register: Register = (on, options) => {
       // a reply you were not looking at waits for you until its tab comes to the front (checked detached: osascript is slow)
       void markUnseenIfAway($).catch(() => {})
       const [own, away, now] = await Promise.all([read($, ownRecapAtom), read($, awayRecapAtom), $.clock.now()])
-      if (e.answer && isRecapDue(newestRecap(own, away), now, isRecapOn)) void makeRecap($, e.answer).catch(() => {})
+      if (e.answer && isRecapDue(newestRecap(own, away), now, isRecapOn)) void makeRecap($, e.answer, isRenameOn).catch(() => {})
     }
     void refreshTranscript($).catch(() => {}) // the title is written, and rewritten, after turns
     void writeSnap($).catch(() => {})
@@ -829,14 +923,29 @@ export const register: Register = (on, options) => {
   // ---- the band: only while the pane is not on screen (closed, waiting for width, or a tab behind another) ----
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || (await read($, hiddenAtom))) return next(e)
+    if (e.props.hasSurvey) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    // The rename question shows above the prompt while the session is idle, with or without the dog.
+    const offer = e.props.isWorking ? null : await read($, renameOfferAtom)
+    const ask = offer ? (
+      <Box key="rename" flexDirection="row" columnGap={2} alignItems="center">
+        <Text wrap="truncate">
+          <Text color="subtle">Rename this session to </Text>
+          <Text bold>{`"${offer}"`}</Text>
+          <Text color="subtle">?</Text>
+        </Text>
+        <Button key="rename-yes" label="Rename" variant="primary" onPress={() => renameTo($, offer)} />
+        <Button key="rename-keep" label="Keep" plain dimColor onPress={() => keepName($, offer)} />
+      </Box>
+    ) : null
+    const onTop = async () => (ask ? <Box flexDirection="column" rowGap={1}>{ask}{await next(e)}</Box> : next(e))
+    if (await read($, hiddenAtom)) return onTop()
     const panes = await $.ui.panes().catch(() => []) // unknown: draw the band, so the dog never disappears
-    if (panes.some(p => p.id === PANE && p.isPlaced && p.isShown)) return next(e)
+    if (panes.some(p => p.id === PANE && p.isPlaced && p.isShown)) return onTop()
     const [status, sessions] = await Promise.all([readStatus($, e.props.isWorking), read($, sessionsAtom)])
     const pet = await drawPet($, e, status.mood)
-    if (!pet) return next(e)
+    if (!pet) return onTop()
 
-    const { Box, Text, Button } = $.ui.resolve(e)
     const { head, plan, usage } = status
     const isNarrow = e.props.bodyColumns < 80
     const context = usage?.contextPercent ?? null
@@ -844,8 +953,8 @@ export const register: Register = (on, options) => {
     const ruleDone = plan.total ? Math.round((plan.done / plan.total) * ruleCells) : 0
     const others = sessionsLine(sessions)
 
-    return (
-      <Box flexDirection="row" justifyContent="flex-end" alignItems="flex-start" columnGap={2}>
+    const band = (
+      <Box key="band" flexDirection="row" justifyContent="flex-end" alignItems="flex-start" columnGap={2}>
         <Box flexDirection="column">
           <Text color={head.tone} bold={head.isBold} weight={head.isBold ? 'semibold' : 'regular'} wrap="truncate">
             {head.text}
@@ -890,5 +999,6 @@ export const register: Register = (on, options) => {
         {pet}
       </Box>
     )
+    return ask ? <Box flexDirection="column" rowGap={1}>{ask}{band}</Box> : band
   })
 }

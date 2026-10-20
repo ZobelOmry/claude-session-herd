@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { fit, firstSentence, isRecapDue, itermGuid, lastAwaySummary, needsYou, newestRecap, shortModel, paneLayout, lastTitle, age, paneRows, summary, duration, filledCells, headline, liveOthers, planOf, sessionsLine } from '../hooks/register'
+import { cleanName, fit, firstSentence, isDifferentName, isRecapDue, parseRecapReply, shouldAskRename, itermGuid, lastAwaySummary, needsYou, newestRecap, shortModel, paneLayout, lastTitle, age, paneRows, summary, duration, filledCells, headline, liveOthers, planOf, sessionsLine } from '../hooks/register'
 
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { bodyRows: 20, offset: 0 }, view: {} } as never
 const BAND = { plugin: 'herd', component: 'AbovePrompt', props: PROPS } as const
@@ -404,4 +404,142 @@ test('when osascript fails (no Automation permission), a finished turn never wai
   const ui = await $.ui.mount(PANE60)
   expect(await ui.find({ type: 'Text', text: 'Nothing needs you' })).toBeDefined()
   await ui.unmount()
+})
+
+test('Haiku’s reply gives a recap and a name; a bad name or no JSON gives no name', () => {
+  expect(parseRecapReply('{"recap": "Fixing the race. Next, CI.", "name": "Checkout test race fix"}')).toEqual({ recap: 'Fixing the race. Next, CI.', name: 'Checkout test race fix' })
+  expect(parseRecapReply('```json\n{"recap": "R.", "name": "“Pricing table”"}\n```')).toEqual({ recap: 'R.', name: 'Pricing table' })
+  expect(parseRecapReply('Just a sentence.')).toEqual({ recap: 'Just a sentence.', name: null })
+  expect(parseRecapReply('{"recap": "Cut off at the cap. Next, te')).toEqual({ recap: null, name: null }) // never raw JSON
+  expect(parseRecapReply('{"recap": "Whole recap.", "name": "Some na')).toEqual({ recap: 'Whole recap.', name: null })
+  expect(parseRecapReply('{"recap": 42, "name": "X"}').recap).toBeNull()
+  expect(parseRecapReply('{"recap": "R.", "name": "a name that is far too long to be a session name"}').name).toBeNull()
+})
+
+test('a suggested name is one clean line, safe as a /rename argument', () => {
+  expect(cleanName('Fix\n/quit now')).toBe('Fix quit now')
+  expect(cleanName('--force Checkout fix')).toBe('force Checkout fix')
+  expect(cleanName('  “Pricing”   page \\ redesign ')).toBe('Pricing page redesign')
+  expect(cleanName('one two three four five six seven')).toBeNull()
+  expect(cleanName('   ')).toBeNull()
+})
+
+test('a rename is offered at most hourly, more rarely over your own name, and Keep holds for 3 hours on the same topic', () => {
+  const H = 60 * 60_000
+  expect(isDifferentName('Checkout test race fix', 'Fix the checkout test race')).toBe(false)
+  expect(isDifferentName('Postgres 16 migration', 'Checkout test race fix')).toBe(true)
+  expect(isDifferentName('Anything', null)).toBe(true)
+  const base = { name: 'Postgres 16 migration', current: 'Checkout test race fix', isCustom: false, ask: null, now: 10 * H }
+  expect(shouldAskRename(base)).toBe(true)
+  expect(shouldAskRename({ ...base, current: 'Migration to Postgres 16' })).toBe(false) // already says it
+  expect(shouldAskRename({ ...base, name: null })).toBe(false)
+  expect(shouldAskRename({ ...base, ask: { lastAskAt: 9.5 * H, keptName: null, keptAt: 0 } })).toBe(false) // asked 30 min ago
+  expect(shouldAskRename({ ...base, isCustom: true, ask: { lastAskAt: 8 * H, keptName: null, keptAt: 0 } })).toBe(false) // your name: 3 h
+  expect(shouldAskRename({ ...base, isCustom: true, ask: { lastAskAt: 6.9 * H, keptName: null, keptAt: 0 } })).toBe(true)
+  const kept = { lastAskAt: 8 * H, keptName: 'Postgres 16 migration', keptAt: 8 * H }
+  expect(shouldAskRename({ ...base, ask: kept })).toBe(false) // you kept your name for this topic
+  expect(shouldAskRename({ ...base, name: 'Pricing page redesign', ask: kept })).toBe(true) // a new topic
+})
+
+const NAMED = { text: '{"recap": "Rewriting the migration runner.", "name": "Postgres 16 migration"}' }
+const toasts: string[] = []
+const renameFacts = (on: On, commands: unknown[], refuse = false, reply = () => NAMED.text) => {
+  on('session.id', () => ({ value: 'self1234' }) as never)
+  on('session.cwd', () => ({ value: '/work/herd' }) as never)
+  on('session.model', () => ({ value: 'claude-opus-5-5' }) as never)
+  on('env.get', () => ({ value: '/home/test' }) as never) // not in iTerm: nothing waits on a tab
+  on('fs.write', () => ({ value: undefined }) as never)
+  on('process.run', () => ({ value: { stdout: '', stderr: '', exitCode: 0 } }) as never)
+  on('model.complete', () => ({ value: { isAnswered: true, text: reply(), usage: { input_tokens: 900, output_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) as never)
+  on('ui.panes', () => ({ value: [] }) as never)
+  on('ui.render', () => ({ type: 'Box', props: {}, children: [] }) as never)
+  on('turn.complete', () => ({ text: '' }) as never)
+  on('command.run', (_$, e) => {
+    commands.push(e)
+    if (refuse) throw new Error('this command cannot run from a plugin') // the engine rejects the call
+    return { value: {} } as never
+  })
+  on('prompt.fill', (_$, e) => { commands.push({ fill: (e as { text: string }).text }); return { isFilled: true } as never })
+  on('ui.toast', (_$, e) => { toasts.push((e as { text: string }).text); return { value: undefined } as never })
+}
+const IDLE_BAND = { plugin: 'herd', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { bodyRows: 20, offset: 0 }, view: {} } as never } as const
+
+test('after a turn, the band offers the new name; Rename runs /rename with it', async ($, on) => {
+  mock.clock(on, { now: 1_800_000_000_000 })
+  mock.store(on)
+  const commands: unknown[] = []
+  renameFacts(on, commands)
+  await $.turn.complete(TURN)
+  await settle()
+  const busy = await $.ui.mount({ ...IDLE_BAND, props: { ...(IDLE_BAND.props as object), isWorking: true } as never })
+  expect(await busy.find({ key: 'rename-yes' })).toBeUndefined() // never mid-turn
+  await busy.unmount()
+  const ui = await $.ui.mount(IDLE_BAND)
+  expect(await ui.find({ type: 'Text', text: '"Postgres 16 migration"' })).toBeDefined()
+  await ui.press({ key: 'rename-yes' })
+  expect(commands).toContainEqual(expect.objectContaining({ command: 'rename', args: 'Postgres 16 migration' }))
+  expect(await ui.find({ key: 'rename-yes' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('where /rename is refused, a toast says what to type and the prompt is left alone', async ($, on) => {
+  mock.clock(on, { now: 1_800_000_000_000 })
+  mock.store(on)
+  const commands: unknown[] = []
+  renameFacts(on, commands, true)
+  await $.turn.complete(TURN)
+  await settle()
+  const ui = await $.ui.mount(IDLE_BAND)
+  await ui.press({ key: 'rename-yes' })
+  expect(commands.some(c => (c as { fill?: string }).fill)).toBe(false)
+  expect(toasts).toContain('Type /rename Postgres 16 migration to rename the session.')
+  await ui.unmount()
+})
+
+test('Keep closes the offer, and the same name is not offered again within 3 hours', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_800_000_000_000 })
+  mock.store(on)
+  renameFacts(on, [])
+  await $.turn.complete(TURN)
+  await settle()
+  const ui = await $.ui.mount(IDLE_BAND)
+  await ui.press({ key: 'rename-keep' })
+  expect(await ui.find({ key: 'rename-yes' })).toBeUndefined()
+  await ui.unmount()
+  await clock.advance(2 * 60 * 60_000)
+  await $.turn.complete(TURN)
+  await settle()
+  const again = await $.ui.mount(IDLE_BAND)
+  expect(await again.find({ key: 'rename-yes' })).toBeUndefined()
+  await again.unmount()
+})
+
+test('with rename suggestions off, no name is ever offered', { options: { renames: false } }, async ($, on) => {
+  mock.clock(on, { now: 1_800_000_000_000 })
+  mock.store(on)
+  renameFacts(on, [])
+  await $.turn.complete(TURN)
+  await settle()
+  const ui = await $.ui.mount(IDLE_BAND)
+  expect(await ui.find({ key: 'rename-yes' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the offer goes once the work no longer supports it', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_800_000_000_000 })
+  mock.store(on)
+  let reply = NAMED.text
+  renameFacts(on, [], false, () => reply)
+  await $.turn.complete(TURN)
+  await settle()
+  const ui = await $.ui.mount(IDLE_BAND)
+  expect(await ui.find({ key: 'rename-yes' })).toBeDefined()
+  await ui.unmount()
+  reply = '{"recap": "Now on the pricing page.", "name": "Pricing page redesign"}'
+  await clock.advance(6 * 60_000) // a new recap, inside the hourly gap: no new offer, and the old one no longer fits
+  await $.turn.complete(TURN)
+  await settle()
+  const after = await $.ui.mount(IDLE_BAND)
+  expect(await after.find({ key: 'rename-yes' })).toBeUndefined()
+  await after.unmount()
 })

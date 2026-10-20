@@ -2,6 +2,7 @@ export type Flash = { kind: 'happy' | 'sad'; until: number; durationMs?: number 
 export type Task = { subject: string; status: string }
 export type Usage = { contextPercent: number | null; fiveHourPercent: number | null; costUsd: number | null }
 export type Recap = { text: string; at: number }
+export type RenameAsk = { lastAskAt: number; keptName: string | null; keptAt: number }
 export type SessionSnap = {
   id: string
   name: string
@@ -39,6 +40,9 @@ declare module 'claude-code' {
       ownRecap: Recap | null
       awayRecap: Recap | null
       expanded: Record<string, boolean>
+      isCustomTitle: boolean
+      renameOffer: string | null
+      renameAsk: RenameAsk | null
       demo: { mood: 'idle' | 'working' | 'happy' | 'sad' | 'waiting'; label: string } | null
     }
   }

@@ -9,6 +9,12 @@
       "title": "Fresh recaps",
       "description": "After a turn ends, ask Haiku for a one-line recap of the session (at most one every 5 minutes). Off: no model calls; the panel shows only Claude Code's own recaps.",
       "default": true
+    },
+    "renames": {
+      "type": "boolean",
+      "title": "Rename suggestions",
+      "description": "Now and then, offer a new session name based on the work (from the same Haiku call as the recap, so no extra tokens). At most once an hour per session.",
+      "default": true
     }
   }
 }
