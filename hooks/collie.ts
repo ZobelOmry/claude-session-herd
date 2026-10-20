@@ -1,5 +1,5 @@
-// Generated from the collie sprite sheet (tricolour coat): one letter per pixel, "." transparent.
-// Two pixel rows make one terminal row. Edit the sheet and regenerate rather than editing frames here.
+// The border collie (tricolour coat): one letter per pixel, "." transparent.
+// Two pixel rows make one terminal row. Each mood is a list of frames, one every 500 ms.
 
 export type Mood = "idle" | "working" | "happy" | "sad" | "waiting"
 export type Sprite = { width: number; height: number; moods: Record<Mood, string[][]> }

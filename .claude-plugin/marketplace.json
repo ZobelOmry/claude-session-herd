@@ -1,0 +1,16 @@
+{
+  "name": "claude-session-herd",
+  "owner": {
+    "name": "ZobelOmry"
+  },
+  "plugins": [
+    {
+      "name": "herd",
+      "source": "./",
+      "description": "A pixel border collie that watches all your Claude Code sessions"
+    }
+  ],
+  "metadata": {
+    "description": "herd: a pixel border collie that watches all your Claude Code sessions"
+  }
+}

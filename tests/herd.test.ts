@@ -197,7 +197,7 @@ test('the label is the tab title, the newest one, with the folder as the fallbac
 })
 
 test('a click on a row brings the session iTerm tab to the front', async ($, on) => {
-  const GUID = '42DA848C-551C-493B-A455-00B282DDDD85'
+  const GUID = '0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0'
   expect(itermGuid(`w0t0p0:${GUID}`)).toBe(GUID)
   expect(itermGuid('w0t0p0:"; do shell script "rm')).toBeNull()
   expect(itermGuid(undefined)).toBeNull()
@@ -314,7 +314,7 @@ test('a finished turn you did not see waits for you, after a dialog and before w
   expect(rows[4]!.detail).toBe('r did things.')
 })
 
-const GUID = '42DA848C-551C-493B-A455-00B282DDDD85'
+const GUID = '0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0'
 type On = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[1]
 const sessionFacts = (on: On, front: { isFront: boolean; isDenied?: boolean }, calls: unknown[]) => {
   on('session.id', () => ({ value: 'self1234' }) as never)
