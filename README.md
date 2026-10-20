@@ -9,6 +9,7 @@ It barks when one needs you, so none of them sit there waiting while you're thre
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d77757)](https://docs.anthropic.com/en/docs/claude-code)
 ![macOS + iTerm2](https://img.shields.io/badge/jump%20to%20tab-macOS%20%2B%20iTerm2-555)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [Install](#install) · [What it does](#what-it-does) · [Commands](#commands) · [Settings](#settings) · [How it works](#how-it-works) · [FAQ](#faq)
 
@@ -137,6 +138,10 @@ claude plugin validate .         # what the engine will load, and what it would 
 ```
 
 The dog's frames are plain text in [`hooks/collie.ts`](hooks/collie.ts): one letter per pixel, two pixel rows per terminal row. Everything else lives in [`hooks/register.tsx`](hooks/register.tsx).
+
+## License
+
+[MIT](LICENSE). Take the dog, it likes new places.
 
 ---
 
