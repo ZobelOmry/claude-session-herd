@@ -148,6 +148,8 @@ claude plugin test .             # run the tests
 claude plugin validate .         # what the engine will load, and what it would refuse
 ```
 
+Before you open a pull request, run the done loop in [`CLAUDE.md`](CLAUDE.md): review until clean, test end to end, look at it, check the ask.
+
 The dog's frames are plain text in [`hooks/collie.ts`](hooks/collie.ts): one letter per pixel, two pixel rows per terminal row. Everything else lives in [`hooks/register.tsx`](hooks/register.tsx).
 
 ## License

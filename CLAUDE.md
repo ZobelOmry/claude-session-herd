@@ -23,12 +23,19 @@ herd is a Claude Code plugin ("mod"): a side pane that lists every running Claud
 - A suggested name passes `cleanName()` before it reaches `/rename`; the rename fallback never writes into the prompt box.
 - A name set with `/rename` (`customTitle`) wins over Claude Code's `aiTitle`.
 
-## Check before saying done
+## Done loop: every change, before saying done
 
-```bash
-claude plugin test .        # all tests
-claude plugin validate .    # manifest, marketplace, hooks module
-npx -y -p typescript tsc -p .
-```
+Do all four steps, in order, without being asked. A fix in any step restarts the loop at step 1.
 
-Then a real run: `claude -p "…" --debug-file debug.log` from a scratch folder, and read the `herd` lines and the session's snapshot. Push to `main` only with the owner's go-ahead.
+1. **Review until clean.** Review the full diff (the `code-review` skill or a reviewer subagent): bugs, missed paths, UX paths no test covers, README / CLAUDE.md drift. Fix every real finding, then review again. Stop only when a review finds nothing.
+2. **Test end to end.**
+   ```bash
+   claude plugin test .        # all tests
+   claude plugin validate .    # manifest, marketplace, hooks module
+   npx -y -p typescript tsc -p .
+   ```
+   Then a real run: `claude -p "…" --debug-file debug.log` from a scratch folder, and read the `herd` lines and the session's snapshot. Exercise the error paths too (no iTerm2, `recaps: false`, a refused `/rename`).
+3. **Look at it.** For any pane, band or toast change, see it in a live iTerm2 session at a wide (≥ 62), a medium (~44) and a narrow (≤ 34) pane width. For a README image change, open the re-rendered `assets/` files in Chrome and check them at full size.
+4. **Check the ask.** Re-read the owner's request, item by item, and mark each one done (with the evidence) or not done (with the reason). An item the diff does not cover is not done.
+
+Report all four with evidence. Push to `main` only with the owner's go-ahead, every push.
