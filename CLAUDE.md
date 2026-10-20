@@ -35,7 +35,11 @@ Do all four steps, in order, without being asked. A fix in any step restarts the
    npx -y -p typescript tsc -p .
    ```
    Then a real run: `claude -p "…" --debug-file debug.log` from a scratch folder, and read the `herd` lines and the session's snapshot. Exercise the error paths too (no iTerm2, `recaps: false`, a refused `/rename`).
-3. **Look at it.** For any pane, band or toast change, see it in a live iTerm2 session at a wide (≥ 62), a medium (~44) and a narrow (≤ 34) pane width. For a README image change, open the re-rendered `assets/` files in Chrome and check them at full size.
+3. **Test the UI in Chrome.** Use Claude in Chrome (the `claude-in-chrome` tools) on every UI surface the change touches. Take screenshots and read the console:
+   - The README as GitHub renders it (the pushed branch, or `stage.html` before the push): images, GIF, links, layout at phone and desktop widths.
+   - The `assets/` renders at full size, and the `readme/stage.html` frames at each pane width.
+
+   Chrome cannot show a terminal. So also see every pane, band or toast change in a live iTerm2 session at a wide (≥ 62), a medium (~44) and a narrow (≤ 34) pane width.
 4. **Check the ask.** Re-read the owner's request, item by item, and mark each one done (with the evidence) or not done (with the reason). An item the diff does not cover is not done.
 
 Report all four with evidence. Push to `main` only with the owner's go-ahead, every push.
