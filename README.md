@@ -64,10 +64,10 @@ The recap is the newest of two sources:
 Sessions get named after their first prompt, and then the work moves on. Now and then, when a session is idle and its work no longer matches its name, herd asks right above the prompt:
 
 ```
-Rename this session to "Postgres 16 migration"?   [ Rename ]   Keep
+Rename this session to "Postgres 16 migration"?   [ Rename ]   Keep   click one
 ```
 
-**Rename** runs `/rename` for you. **Keep** leaves it alone for 3 hours, unless the work moves to a new topic. It asks at most once an hour, and less often over a name you picked yourself. The name comes from the same Haiku call as the recap, so it costs nothing extra.
+Click a button to answer. **Rename** runs `/rename` for you. **Keep** leaves it alone for 3 hours, unless the work moves to a new topic. It asks at most once an hour, and less often over a name you picked yourself. The name comes from the same Haiku call as the recap, so it costs nothing extra.
 
 ### Takes you there
 

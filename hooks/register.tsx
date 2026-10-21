@@ -936,6 +936,7 @@ export const register: Register = (on, options) => {
         </Text>
         <Button key="rename-yes" label="Rename" variant="primary" onPress={() => renameTo($, offer)} />
         <Button key="rename-keep" label="Keep" plain dimColor onPress={() => keepName($, offer)} />
+        <Text color="subtle">click one</Text>
       </Box>
     ) : null
     const onTop = async () => (ask ? <Box flexDirection="column" rowGap={1}>{ask}{await next(e)}</Box> : next(e))
