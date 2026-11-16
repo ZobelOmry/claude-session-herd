@@ -26,7 +26,7 @@ herd is a Claude Code plugin ("mod"): a side pane that lists every running Claud
 
 ## Done loop: every change, before saying done
 
-Do all four steps, in order, without being asked. A fix in any step restarts the loop at step 1.
+Do all five steps, in order, without being asked. A fix in any step restarts the loop at step 1.
 
 1. **Review until clean.** Review the full diff (the `code-review` skill or a reviewer subagent): bugs, missed paths, UX paths no test covers, README / CLAUDE.md drift. Fix every real finding, then review again. Stop only when a review finds nothing.
 2. **Test end to end.**
@@ -42,5 +42,11 @@ Do all four steps, in order, without being asked. A fix in any step restarts the
 
    Chrome cannot show a terminal. So also see every pane, band or toast change in a live iTerm2 session at a wide (≥ 62), a medium (~44) and a narrow (≤ 34) pane width.
 4. **Check the ask.** Re-read the owner's request, item by item, and mark each one done (with the evidence) or not done (with the reason). An item the diff does not cover is not done.
+5. **Summarize what is ready to ship.** When steps 1–4 are finished, end the final message with this summary, TL;DR style, in this order. A step that could not run, or an ask item not done, goes under Risks / open items with the reason, and then the TL;DR says the change is not ready to ship and names it:
+   - **TL;DR:** one or two sentences: what the change does for the user.
+   - **What changed:** a short list of the user-facing changes (features, commands, settings, defaults, costs), then the internal ones (files, invariants, tests). Name the README and CLAUDE.md sections updated.
+   - **Verified:** steps 1–3, one line each with its evidence (the commands run and their output, the screenshots and console read, the iTerm2 widths seen): review rounds and findings fixed, test and validate results, Chrome and iTerm2 checks. A step that did not run gets its line too: "not run, see Risks". Then step 4, one line per ask item: done + evidence, or not done + reason.
+   - **Risks / open items:** what was not tested (and why), known gaps, follow-ups.
+   - **Next steps:** a numbered list of the actions to take, in order, with who does each (Claude / the owner). Examples: approve the push to `main`, run `/plugin update herd`, restart sessions to load the new hooks, check a behavior after a stated time.
 
-Report all four with evidence. Push to `main` only with the owner's go-ahead, every push.
+Push to `main` only with the owner's go-ahead, every push.
