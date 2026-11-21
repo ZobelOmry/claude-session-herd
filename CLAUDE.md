@@ -18,8 +18,9 @@ herd is a Claude Code plugin ("mod"): a side pane that lists every running Claud
 ## Invariants
 
 - Sessions talk only through `~/.claude/herd/sessions/<id>.json`, written every 3 s; 15 s without a write drops a session.
-- "Needs you" = `waiting` (permission dialog) or `unseen` (a finished turn whose iTerm2 tab was not in front). Ask "does it need you?" with `needsYou()`; compare with `'waiting'` only for permission-specific text (the row detail, the toast).
-- `osascript` fails open: a non-zero exit or no iTerm2 means "you have seen it". It never runs inside a hook the turn waits on.
+- "Needs you" = `waiting` (permission dialog) or `unseen` (a finished turn whose iTerm2 or Ghostty tab was not in front). Ask "does it need you?" with `needsYou()`; compare with `'waiting'` only for permission-specific text (the row detail, the toast).
+- `osascript` fails open: a non-zero exit or neither iTerm2 nor Ghostty means "you have seen it". It never runs inside a hook the turn waits on.
+- A tab is found by `itermId` (from `ITERM_SESSION_ID`) or, in Ghostty, by `ghosttyTty`: Ghostty's AppleScript ids are not in the env (`GHOSTTY_SURFACE_ID` is a different id), so `ownGhosttyTty()` walks up from herd's parent with `ps` to Claude Code's tty, once per load (a `ps` that fails is retried), only when `TERM_PROGRAM=ghostty`. A Ghostty tty wins over an inherited `ITERM_SESSION_ID`. A tty no Ghostty terminal has, or Ghostty not running, counts as seen. Both values pass a validator (`itermGuid()`, `ghosttyTty()`) before they reach a script.
 - One Haiku call per turn at most, once per 5 min per session, never two in flight; it returns the recap and the rename name together. `recaps: false` means no model call at all.
 - A suggested name passes `cleanName()` before it reaches `/rename`; the rename fallback never writes into the prompt box.
 - A name set with `/rename` (`customTitle`) wins over Claude Code's `aiTitle`.
@@ -35,12 +36,12 @@ Do all five steps, in order, without being asked. A fix in any step restarts the
    claude plugin validate .    # manifest, marketplace, hooks module
    npx -y -p typescript tsc -p .
    ```
-   Then a real run: `claude -p "…" --debug-file debug.log` from a scratch folder, and read the `herd` lines and the session's snapshot. Exercise the error paths too (no iTerm2, `recaps: false`, a refused `/rename`).
+   Then a real run: `claude -p "…" --debug-file debug.log` from a scratch folder, and read the `herd` lines and the session's snapshot. Exercise the error paths too (neither iTerm2 nor Ghostty, `recaps: false`, a refused `/rename`).
 3. **Test the UI in Chrome.** Use Claude in Chrome (the `claude-in-chrome` tools) on every UI surface the change touches. Take screenshots and read the console:
    - The README as GitHub renders it (the pushed branch; before the push, `assets/stage/stage.html?scene=hero`): images, GIF, links, layout at phone and desktop widths.
    - The `assets/` renders at full size, and `assets/stage/stage.html?scene=widths`.
 
-   Chrome cannot show a terminal. So also see every pane, band or toast change in a live iTerm2 session at a wide (≥ 62), a medium (~44) and a narrow (≤ 34) pane width.
+   Chrome cannot show a terminal. So also see every pane, band or toast change in a live iTerm2 (or Ghostty, for a Ghostty change) session at a wide (≥ 62), a medium (~44) and a narrow (≤ 34) pane width.
 4. **Check the ask.** Re-read the owner's request, item by item, and mark each one done (with the evidence) or not done (with the reason). An item the diff does not cover is not done.
 5. **Summarize what is ready to ship.** When steps 1–4 are finished, end the final message with this summary, TL;DR style, in this order. A step that could not run, or an ask item not done, goes under Risks / open items with the reason, and then the TL;DR says the change is not ready to ship and names it:
    - **TL;DR:** one or two sentences: what the change does for the user.

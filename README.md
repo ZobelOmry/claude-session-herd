@@ -8,7 +8,7 @@
 It barks when one needs you, so none of them sit there waiting while you're three tabs away.
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d77757)](https://docs.anthropic.com/en/docs/claude-code)
-![macOS + iTerm2](https://img.shields.io/badge/jump%20to%20tab-macOS%20%2B%20iTerm2-555)
+![macOS + iTerm2 or Ghostty](https://img.shields.io/badge/jump%20to%20tab-macOS%20%2B%20iTerm2%20%7C%20Ghostty-555)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [Install](#install) · [What it does](#what-it-does) · [Commands](#commands) · [Settings](#settings) · [How it works](#how-it-works) · [FAQ](#faq)
@@ -35,7 +35,7 @@ At the prompt of any Claude Code session:
 
 Answer `y` to add the marketplace, pick a scope (user scope gives every new session the panel), and that's it. The panel opens on its own when the terminal is wide enough. Type `/sessions` to open it any time.
 
-> **Works best on macOS with iTerm2.** The list, recaps, meters and the dog work in any terminal. Jumping to a tab and knowing whether you've seen a reply use iTerm2's AppleScript, so they are iTerm2-only.
+> **Works best on macOS with iTerm2 or Ghostty (1.3+).** The list, recaps, meters and the dog work in any terminal. Jumping to a tab and knowing whether you've seen a reply use the terminal's AppleScript, so they need one of those two.
 
 ## What it does
 
@@ -71,7 +71,7 @@ Click a button to answer. **Rename** runs `/rename` for you. **Keep** leaves it 
 
 ### Takes you there
 
-Click any row and its iTerm2 tab jumps to the front, window and all.
+Click any row and its iTerm2 or Ghostty tab jumps to the front, window and all.
 
 ### Keeps the vitals in view
 
@@ -122,8 +122,8 @@ Change them in `/config`, where each shows as a row of its own.
 
 - **No server, no daemon.** Each session writes one JSON file every 3 seconds and reads the others'. A session that stops writing for 15 seconds drops off the list.
 - **Titles and Claude Code's recaps** come from the session's own transcript. A name you set with `/rename` wins over the one Claude Code picked.
-- **"Have you seen it?"** is one `osascript` call that asks iTerm2 whether that tab is in front. It only runs while a reply is waiting. If macOS denies the permission, herd assumes you've seen it rather than nagging you about every turn.
-- **The jump** is another `osascript` call that selects the tab by its iTerm2 session id. Only a validated id goes into it.
+- **"Have you seen it?"** is one `osascript` call that asks iTerm2 or Ghostty whether that tab is in front. It only runs while a reply is waiting. If macOS denies the permission, herd assumes you've seen it rather than nagging you about every turn.
+- **The jump** is another `osascript` call that selects the tab: by its iTerm2 session id, or in Ghostty by the session's tty (Ghostty's script ids are not in the environment, so each session looks up its tty once with `ps`). Only a validated id or tty path goes into it.
 - **Nothing leaves your machine** except the optional Haiku recap, which goes through Claude Code's own API client like any other request.
 
 ## FAQ
@@ -131,11 +131,11 @@ Change them in `/config`, where each shows as a row of its own.
 **Does it cost tokens?**
 Only the fresh recaps: one small Haiku call per session, at most every 5 minutes, on the last prompt and reply (a few thousand tokens). Rename suggestions ride on the same call. Turn **Fresh recaps** off and herd costs nothing.
 
-**I use Terminal.app / Ghostty / tmux / VS Code.**
-The panel, the recaps, the meters and the dog all work. Clicking a row shows a toast instead of jumping, and a finished turn never counts as unseen. Pull requests for other terminals are very welcome.
+**I use Terminal.app / tmux / VS Code / an older Ghostty.**
+The panel, the recaps, the meters and the dog all work. Clicking a row shows a toast instead of jumping, and a finished turn never counts as unseen. Ghostty needs 1.3 or newer (its first version with AppleScript). Pull requests for other terminals are very welcome.
 
-**macOS asks whether Claude Code may control iTerm2.**
-That's the AppleScript behind the jump and the "seen" check. Allow it to get both; deny it and everything else keeps working.
+**macOS asks whether Claude Code may control iTerm2 (or Ghostty).**
+That's the AppleScript behind the jump and the "seen" check. Allow it to get both; deny it (or set `macos-applescript = false` in Ghostty) and everything else keeps working.
 
 **Why a border collie?**
 It's the dog whose whole job is watching a flock and fetching the one that wandered off. It seemed qualified.
