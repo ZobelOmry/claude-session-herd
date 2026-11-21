@@ -333,7 +333,7 @@ export function paneRows(self: SessionSnap | null, others: SessionSnap[], now: n
     }))
 }
 
-// ---- jump to a session: iTerm only (ITERM_SESSION_ID is `w0t3p0:<GUID>`, the GUID is iTerm's `unique id`) ----
+// ---- jump to a session: iTerm2 (ITERM_SESSION_ID is `w0t3p0:<GUID>`, the GUID is iTerm's `unique id`) ----
 
 // The id comes back from a shared folder and goes into a script, so only a GUID passes.
 export function itermGuid(envValue: string | undefined | null): string | null {
@@ -360,11 +360,54 @@ const FOCUS_SCRIPT = `on run {sid}
   return "none"
 end run`
 
+// ---- jump to a session: Ghostty (1.3+ scripting). Its AppleScript terminal ids are not in the env
+// (GHOSTTY_SURFACE_ID is another id), so a session is found by its tty, which Ghostty reports per terminal ----
+
+// The tty also comes back from the shared folder and goes into a script, so only a macOS tty path passes.
+export function ghosttyTty(value: string | undefined | null): string | null {
+  const tty = value?.trim() ?? ''
+  return /^\/dev\/ttys\d+$/.test(tty) ? tty : null
+}
+
+// Hooks run without a terminal, so walk up from herd's parent to the first process that has one: Claude Code.
+const TTY_SCRIPT = 'p=$PPID; while [ "${p:-1}" -gt 1 ]; do t=$(ps -o tty= -p "$p" | tr -d " "); case "$t" in ttys*) echo "/dev/$t"; exit 0;; esac; p=$(ps -o ppid= -p "$p" | tr -d " "); done'
+
+let ownTty: Promise<string | null> | null = null // module var on purpose: a session's tty never changes, so ps runs once per load
+function ownGhosttyTty($: $): Promise<string | null> {
+  ownTty ??= (async () => {
+    if ((await $.env.get('TERM_PROGRAM')) !== 'ghostty') return null
+    const { stdout } = await $.process.run(['sh', '-c', TTY_SCRIPT], { timeoutMs: 5000 })
+    return ghosttyTty(stdout)
+  })().catch(() => {
+    ownTty = null // a ps that failed to start or timed out is retried on the next refresh
+    return null
+  })
+  return ownTty
+}
+
+const GHOSTTY_FOCUS_SCRIPT = `on run {ttyPath}
+  if application "Ghostty" is not running then return "none"
+  tell application "Ghostty"
+    repeat with t in terminals
+      if tty of t is ttyPath then
+        focus t
+        activate
+        return "ok"
+      end if
+    end repeat
+  end tell
+  return "none"
+end run`
+
 async function focusSession($: $, snap: SessionSnap) {
-  const guid = itermGuid(snap.itermId)
-  if (!guid) return $.ui.toast(`${snap.title || snap.name} is not in an iTerm tab`)
-  const { stdout } = await $.process.run(['osascript', '-e', FOCUS_SCRIPT, guid], { timeoutMs: 5000 })
-  if (stdout.trim() !== 'ok') $.ui.toast(`No iTerm tab for ${snap.title || snap.name}`)
+  const label = snap.title || snap.name
+  // Ghostty first: a Ghostty started from an iTerm2 shell inherits ITERM_SESSION_ID
+  const tty = ghosttyTty(snap.ghosttyTty)
+  const guid = tty ? null : itermGuid(snap.itermId)
+  if (!guid && !tty) return $.ui.toast(`${label} is not in an iTerm2 or Ghostty tab`)
+  const argv = guid ? ['osascript', '-e', FOCUS_SCRIPT, guid] : ['osascript', '-e', GHOSTTY_FOCUS_SCRIPT, tty!]
+  const { stdout } = await $.process.run(argv, { timeoutMs: 5000 })
+  if (stdout.trim() !== 'ok') $.ui.toast(`No ${guid ? 'iTerm2' : 'Ghostty'} tab for ${label}`)
 }
 
 // True only while iTerm is the front app and this session's tab is its current one.
@@ -376,10 +419,24 @@ const FRONT_SCRIPT = `on run {sid}
   return "no"
 end run`
 
+// The same for Ghostty: the front window's selected tab has this session's terminal focused.
+// A tty no Ghostty terminal has (screen, an ssh session, an older tmux) counts as seen, like every other failure.
+const GHOSTTY_FRONT_SCRIPT = `on run {ttyPath}
+  if application "Ghostty" is not running then return "yes"
+  tell application "Ghostty"
+    if (count of (terminals whose tty is ttyPath)) = 0 then return "yes"
+    if not frontmost then return "no"
+    if tty of focused terminal of selected tab of front window is ttyPath then return "yes"
+  end tell
+  return "no"
+end run`
+
 async function isTabInFront($: $): Promise<boolean> {
-  const guid = itermGuid(await $.env.get('ITERM_SESSION_ID'))
-  if (!guid) return true // not in iTerm: nothing to watch, so a finished turn never waits on a tab
-  const { stdout, exitCode } = await $.process.run(['osascript', '-e', FRONT_SCRIPT, guid], { timeoutMs: 5000 })
+  const tty = await ownGhosttyTty($)
+  const guid = tty ? null : itermGuid(await $.env.get('ITERM_SESSION_ID'))
+  if (!guid && !tty) return true // in neither iTerm2 nor Ghostty: nothing to watch, so a finished turn never waits on a tab
+  const argv = guid ? ['osascript', '-e', FRONT_SCRIPT, guid] : ['osascript', '-e', GHOSTTY_FRONT_SCRIPT, tty!]
+  const { stdout, exitCode } = await $.process.run(argv, { timeoutMs: 5000 })
   // fail open: a denied Automation permission or a hung iTerm must never mark every turn as waiting
   return exitCode !== 0 || stdout.trim() !== 'no'
 }
@@ -480,7 +537,7 @@ async function makeRecap($: $, answer: string, isRenameOn: boolean) {
 }
 
 async function writeSnap($: $, extra: Partial<SessionSnap> = {}) {
-  const [id, cwd, isWaiting, isWorking, tasks, waitingFor, stateSince, title, now, termId, isUnseen, own, away, model] = await Promise.all([
+  const [id, cwd, isWaiting, isWorking, tasks, waitingFor, stateSince, title, now, termId, isUnseen, own, away, model, tty] = await Promise.all([
     $.session.id(),
     $.session.cwd(),
     read($, waitingAtom),
@@ -495,6 +552,7 @@ async function writeSnap($: $, extra: Partial<SessionSnap> = {}) {
     read($, ownRecapAtom),
     read($, awayRecapAtom),
     $.session.model().catch(() => null),
+    ownGhosttyTty($),
   ])
   const state = isWaiting ? 'waiting' : isWorking ? 'working' : isUnseen ? 'unseen' : 'ready'
   let since = stateSince?.since ?? now
@@ -512,6 +570,7 @@ async function writeSnap($: $, extra: Partial<SessionSnap> = {}) {
     since,
     waitingFor: isWaiting ? waitingFor : null,
     itermId: itermGuid(termId),
+    ghosttyTty: tty,
     recap: newestRecap(own, away),
     model: shortModel(model),
     ...extra,

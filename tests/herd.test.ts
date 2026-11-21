@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { cleanName, fit, firstSentence, isDifferentName, isRecapDue, parseRecapReply, shouldAskRename, itermGuid, lastAwaySummary, needsYou, newestRecap, shortModel, paneLayout, lastTitle, age, paneRows, summary, duration, filledCells, headline, liveOthers, planOf, sessionsLine } from '../hooks/register'
+import { cleanName, fit, firstSentence, isDifferentName, isRecapDue, parseRecapReply, shouldAskRename, itermGuid, ghosttyTty, lastAwaySummary, needsYou, newestRecap, shortModel, paneLayout, lastTitle, age, paneRows, summary, duration, filledCells, headline, liveOthers, planOf, sessionsLine } from '../hooks/register'
 
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { bodyRows: 20, offset: 0 }, view: {} } as never
 const BAND = { plugin: 'herd', component: 'AbovePrompt', props: PROPS } as const
@@ -316,14 +316,21 @@ test('a finished turn you did not see waits for you, after a dialog and before w
 
 const GUID = '0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0'
 type On = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[1]
-const sessionFacts = (on: On, front: { isFront: boolean; isDenied?: boolean }, calls: unknown[]) => {
+const TERM_ENV: Record<'iterm' | 'ghostty', Record<string, string>> = {
+  iterm: { ITERM_SESSION_ID: `w0t0p0:${GUID}` },
+  ghostty: { TERM_PROGRAM: 'ghostty' },
+}
+const sessionFacts = (on: On, front: { isFront: boolean; isDenied?: boolean }, calls: unknown[], term: 'iterm' | 'ghostty' = 'iterm', scripts: (readonly string[])[] = []) => {
   on('session.id', () => ({ value: 'self1234' }) as never)
   on('session.cwd', () => ({ value: '/work/herd' }) as never)
   on('session.model', () => ({ value: 'claude-opus-5-5[1m]' }) as never)
-  on('env.get', (_$, e) => ({ value: (e as { name: string }).name === 'ITERM_SESSION_ID' ? `w0t0p0:${GUID}` : '/home/test' }) as never)
+  on('env.get', (_$, e) => ({ value: TERM_ENV[term][(e as { name: string }).name] ?? '/home/test' }) as never)
   on('fs.write', () => ({ value: undefined }) as never)
   on('process.run', (_$, e) => {
     const argv = (e as { argv: readonly string[] }).argv
+    if (argv[0] === 'osascript' || argv[0] === 'sh') scripts.push(argv)
+    if (argv[0] === 'sh') return { value: { stdout: '/dev/ttys004\n', stderr: '', exitCode: 0 } } as never
+    if (argv[0] === 'osascript' && argv[2]?.includes('focus t')) return { value: { stdout: 'ok\n', stderr: '', exitCode: 0 } } as never
     if (argv[0] === 'osascript' && front.isDenied) return { value: { stdout: '', stderr: 'Not authorized to send Apple events (-1743)', exitCode: 1 } } as never
     return { value: { stdout: argv[0] === 'osascript' ? (front.isFront ? 'yes\n' : 'no\n') : '', stderr: '', exitCode: 0 } } as never
   })
@@ -344,7 +351,8 @@ test('a turn ends out of sight: it waits for you, Haiku writes one recap, typing
   mock.store(on)
   const front = { isFront: false }
   const calls: unknown[] = []
-  sessionFacts(on, front, calls)
+  const scripts: (readonly string[])[] = []
+  sessionFacts(on, front, calls, 'iterm', scripts)
   await $.prompt.submit({ text: 'add a recap line' } as never)
   await $.turn.complete(TURN)
   await settle()
@@ -369,6 +377,7 @@ test('a turn ends out of sight: it waits for you, Haiku writes one recap, typing
   const after = await $.ui.mount(PANE60)
   expect(await after.find({ type: 'Text', text: 'Nothing needs you' })).toBeDefined()
   await after.unmount()
+  expect(scripts.some(argv => argv[0] === 'sh')).toBe(false) // outside Ghostty, no tty lookup
 })
 
 test('a turn ends while you look at its tab: nothing waits', async ($, on) => {
@@ -403,6 +412,67 @@ test('when osascript fails (no Automation permission), a finished turn never wai
   await settle()
   const ui = await $.ui.mount(PANE60)
   expect(await ui.find({ type: 'Text', text: 'Nothing needs you' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('in Ghostty, a turn that ends out of sight waits; one that ends in its focused tab does not', async ($, on) => {
+  mock.clock(on, { now: 1_800_000_000_000 })
+  mock.store(on)
+  const front = { isFront: false }
+  const scripts: (readonly string[])[] = []
+  sessionFacts(on, front, [], 'ghostty', scripts)
+  await $.turn.complete(TURN)
+  await settle()
+  const ui = await $.ui.mount(PANE60)
+  expect(await ui.find({ type: 'Text', text: '1 needs you' })).toBeDefined()
+  await ui.unmount()
+  const fronts = scripts.filter(argv => argv[0] === 'osascript')
+  expect(fronts.at(-1)?.at(-1)).toBe('/dev/ttys004')
+  expect(fronts.at(-1)?.[2]).toContain('application "Ghostty"')
+  front.isFront = true
+  await $.prompt.submit({ text: 'next' } as never)
+  await $.turn.complete(TURN)
+  await settle()
+  const after = await $.ui.mount(PANE60)
+  expect(await after.find({ type: 'Text', text: 'Nothing needs you' })).toBeDefined()
+  await after.unmount()
+  expect(scripts.filter(argv => argv[0] === 'sh').length).toBe(1) // the tty is looked up once per load
+})
+
+test('a click on a Ghostty row focuses the terminal on that session’s tty', async ($, on) => {
+  expect(ghosttyTty('/dev/ttys004\n')).toBe('/dev/ttys004')
+  expect(ghosttyTty('/dev/ttys004" then do shell script "rm')).toBeNull()
+  expect(ghosttyTty('ttys004')).toBeNull()
+  expect(ghosttyTty(undefined)).toBeNull()
+
+  mock.clock(on, { now: 0 })
+  mock.store(on)
+  const scripts: (readonly string[])[] = []
+  sessionFacts(on, { isFront: true }, [], 'ghostty', scripts)
+  const shown: string[] = []
+  on('ui.toast', (_$, e) => { shown.push((e as { text: string }).text); return { value: undefined } as never })
+  on('classic.PermissionRequest', () => ({}) as never)
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} } as never)
+  const ui = await $.ui.mount(PANE60)
+  await ui.press({ key: 'go2:self1234' })
+  const run = scripts.at(-1)
+  expect(run?.[2]).toContain('focus t')
+  expect(run?.at(-1)).toBe('/dev/ttys004')
+  expect(shown).toEqual([]) // the jump landed: no toast
+  await ui.unmount()
+})
+
+test('a click on a row in neither iTerm2 nor Ghostty says so in a toast', async ($, on) => {
+  mock.clock(on, { now: 0 })
+  mock.store(on)
+  const commands: unknown[] = []
+  renameFacts(on, commands)
+  toasts.length = 0
+  on('classic.PermissionRequest', () => ({}) as never)
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} } as never)
+  const ui = await $.ui.mount(PANE60)
+  await ui.press({ key: 'go2:self1234' })
+  expect(toasts.at(-1)).toBe('herd is not in an iTerm2 or Ghostty tab')
   await ui.unmount()
 })
 

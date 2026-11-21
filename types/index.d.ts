@@ -14,6 +14,7 @@ export type SessionSnap = {
   waitingFor?: string | null
   isEnded?: boolean
   itermId?: string | null
+  ghosttyTty?: string | null
   recap?: Recap | null
   model?: string | null
 }
